@@ -2,7 +2,7 @@
 
 A full-stack platform to create, configure, and chat with custom AI agents — each with its own personality, skill documents, and isolated session history.
 
-Built as a portfolio project demonstrating the complete SDE 2 stack: FastAPI · React · Docker · Kubernetes · Jenkins CI/CD.
+Built with FastAPI · React · Docker · Kubernetes · Jenkins CI/CD.
 
 ---
 
@@ -39,11 +39,13 @@ Built as a portfolio project demonstrating the complete SDE 2 stack: FastAPI · 
 
 CI/CD
 ──────
-Git commit → Jenkins pipeline
+Pull request → Jenkins runs Test + Build → GitHub blocks merge if red
+Merge to main → Jenkins also runs Push + Deploy
+
   1. Test   — pytest (18 tests, mocked API)
   2. Build  — docker build backend + frontend
-  3. Push   — docker push → Docker Hub (shrenik762/*)
-  4. Deploy — kubectl apply + rollout restart
+  3. Push   — docker push → Docker Hub (shrenik762/*)  [main only]
+  4. Deploy — kubectl apply + rollout restart           [main only]
 ```
 
 ---
@@ -137,7 +139,7 @@ minikube service frontend
 
 ## CI/CD Pipeline (Jenkins)
 
-Jenkins runs in Docker and automatically tests, builds, pushes, and deploys on every commit.
+Jenkins runs in Docker. Every pull request triggers Test + Build — GitHub blocks merge until both pass. Merges to main also push to Docker Hub and deploy to Kubernetes.
 
 ```bash
 # Start Jenkins
@@ -154,12 +156,14 @@ Then configure a **Pipeline script from SCM** job pointing at `file:///home/proj
 
 **Pipeline stages:**
 
-| Stage  | What it does                                         |
-|--------|------------------------------------------------------|
-| Test   | Runs 18 pytest tests with mocked Anthropic calls     |
-| Build  | Builds `shrenik762/ai-agent-backend` and `*-frontend`|
-| Push   | Pushes `:latest` + `:<build_number>` to Docker Hub  |
-| Deploy | `kubectl apply` + `rollout restart` on minikube      |
+| Stage  | Runs on      | What it does                                          |
+|--------|--------------|-------------------------------------------------------|
+| Test   | Every branch | 18 pytest tests with mocked Anthropic calls           |
+| Build  | Every branch | Builds `shrenik762/ai-agent-backend` and `*-frontend` |
+| Push   | main only    | Pushes `:latest` + `:<build_number>` to Docker Hub   |
+| Deploy | main only    | `kubectl apply` + `rollout restart` on minikube       |
+
+PRs are gated — GitHub blocks merge until Test and Build pass.
 
 ---
 
