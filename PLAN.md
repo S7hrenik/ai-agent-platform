@@ -162,28 +162,27 @@ docker cp "$env:TEMP\kubeconfig" jenkins:/var/jenkins_home/.kube/config
 
 ---
 
-## Phase 6 — Polish & Hardening 🔲
+## Phase 6 — Polish & Hardening ✅ DONE
 
-**Goal:** Make it production-ready looking.
+**What was built:**
 
-**What to build:**
-
-- K8s HorizontalPodAutoscaler
-- Backend: input validation improvements
-- Frontend: loading skeletons, form validation feedback
-- Environment-specific configs (dev vs prod)
+- Backend Pydantic validators — name (max 100), description (max 500), system prompt (min 10 / max 10k), doc title/content limits
+- Loading skeletons in sidebar and chat header (shimmer animation)
+- Inline form validation with per-field errors and character counter on system prompt
+- Running Chrome dino replaces typing dots when agent is thinking
+- ChatGPT-style centered input bar (max-width 720px, send button inside)
+- `k8s/hpa.yaml` — HorizontalPodAutoscaler (frontend scales 1→3 replicas at 70% CPU)
 
 ---
 
-## Phase 7 — GitHub & README 🔲
+## Phase 7 — GitHub & README ✅ DONE
 
-**Goal:** Something a hiring manager can clone and run in 5 minutes.
+**What was built:**
 
-**What to build:**
-
-- `README.md` — overview, architecture diagram (ASCII), prerequisites, run instructions (local / Docker / K8s / Jenkins)
-- Clean up any debug code
-- Push to GitHub
+- `README.md` — project overview, ASCII architecture diagram, tech stack table, prerequisites, run instructions (local / Docker / K8s / Jenkins), API reference
+- `k8s/secret.yaml` added to `.gitignore` — prevents API key from being committed
+- History rewritten to remove secrets from initial commit
+- Pushed to https://github.com/S7hrenik/ai-agent-platform
 
 ---
 
