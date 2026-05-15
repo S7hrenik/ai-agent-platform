@@ -6,6 +6,7 @@ pipeline {
         BACKEND_IMAGE   = "${DOCKER_HUB_USER}/ai-agent-backend"
         FRONTEND_IMAGE  = "${DOCKER_HUB_USER}/ai-agent-frontend"
         IMAGE_TAG       = "${BUILD_NUMBER}"
+        IS_MAIN         = "${env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master'}"
     }
 
     stages {
@@ -13,7 +14,7 @@ pipeline {
         // ── 1. TEST ────────────────────────────────────────────────────────
         stage('Test') {
             steps {
-                echo 'Running backend tests...'
+                echo "Running backend tests (branch: ${env.BRANCH_NAME})..."
                 sh '''
                     cd backend
                     pip3 install --quiet --break-system-packages -r requirements.txt pytest httpx
@@ -36,8 +37,14 @@ pipeline {
             }
         }
 
-        // ── 3. PUSH ────────────────────────────────────────────────────────
+        // ── 3. PUSH — main branch only ────────────────────────────────────
         stage('Push') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                }
+            }
             steps {
                 echo 'Pushing images to Docker Hub...'
                 withCredentials([usernamePassword(
@@ -54,8 +61,14 @@ pipeline {
             }
         }
 
-        // ── 4. DEPLOY ──────────────────────────────────────────────────────
+        // ── 4. DEPLOY — main branch only ──────────────────────────────────
         stage('Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'master'
+                }
+            }
             steps {
                 echo 'Deploying to Kubernetes...'
                 sh '''
@@ -73,7 +86,13 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline succeeded — build ${BUILD_NUMBER} deployed."
+            script {
+                if (env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'master') {
+                    echo "Pipeline succeeded — build ${BUILD_NUMBER} deployed."
+                } else {
+                    echo "PR checks passed — Test + Build green. Safe to merge."
+                }
+            }
         }
         failure {
             echo "Pipeline failed — check the logs above."
