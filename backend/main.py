@@ -4,6 +4,7 @@ from pydantic import BaseModel, field_validator
 import uuid
 import agent
 import database
+import vector_store
 
 app = FastAPI(title="AI Agent Platform", version="2.0.0")
 
@@ -18,6 +19,10 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     database.init_db()
+    # Sync any docs that exist in SQLite but not yet in ChromaDB (idempotent upsert).
+    for a in database.list_agents():
+        for doc in database.list_docs(a["id"]):
+            vector_store.add_doc(doc["id"], a["id"], doc["title"], doc["content"])
 
 
 # ── Pydantic models ──
@@ -101,7 +106,11 @@ class DocCreate(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    try:
+        chroma = vector_store.status()
+    except Exception as e:
+        chroma = {"status": "error", "detail": str(e)}
+    return {"status": "ok", "chromadb": chroma}
 
 
 # ── Agent CRUD ──
@@ -137,6 +146,7 @@ def delete_agent(agent_id: str):
     a = database.get_agent(agent_id)
     if not a:
         raise HTTPException(status_code=404, detail="Agent not found")
+    vector_store.delete_agent_docs(agent_id)
     database.delete_agent(agent_id)
 
 
@@ -153,7 +163,9 @@ def list_docs(agent_id: str):
 def add_doc(agent_id: str, body: DocCreate):
     if not database.get_agent(agent_id):
         raise HTTPException(status_code=404, detail="Agent not found")
-    return database.add_doc(agent_id, body.title, body.content)
+    doc = database.add_doc(agent_id, body.title, body.content)
+    vector_store.add_doc(doc["id"], agent_id, doc["title"], doc["content"])
+    return doc
 
 
 @app.delete("/agents/{agent_id}/docs/{doc_id}", status_code=204)
@@ -162,6 +174,7 @@ def delete_doc(agent_id: str, doc_id: str):
     if not doc or doc["agent_id"] != agent_id:
         raise HTTPException(status_code=404, detail="Document not found")
     database.delete_doc(doc_id)
+    vector_store.delete_doc(doc_id)
 
 
 # ── Chat ──
@@ -171,7 +184,7 @@ def chat(agent_id: str, req: ChatRequest):
     a = database.get_agent(agent_id)
     if not a:
         raise HTTPException(status_code=404, detail="Agent not found")
-    docs = database.list_docs(agent_id)
+    docs = vector_store.query_docs(agent_id, req.message)
     session_id = req.session_id or str(uuid.uuid4())
     try:
         reply = agent.chat(req.message, agent_id, session_id, a["system_prompt"], docs)
