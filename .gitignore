@@ -1,6 +1,7 @@
 # Secrets and data — never commit
 backend/.env
 backend/agents.db
+backend/chroma_data/
 k8s/secret.yaml
 
 # Python

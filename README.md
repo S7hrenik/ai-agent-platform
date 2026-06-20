@@ -9,10 +9,11 @@ Built with FastAPI · React · Docker · Kubernetes · Jenkins CI/CD.
 ## Features
 
 - **Custom agents** — give each agent a name, description, and system prompt that defines its personality and expertise
-- **Skill documents** — attach reference docs to any agent; they're injected as context on every message
+- **Skill documents** — attach reference docs to any agent; the most relevant ones are retrieved semantically at chat time via RAG
 - **Isolated sessions** — each agent maintains its own conversation history
 - **Light / dark mode** — respects system preference, persists to localStorage
 - **Persistent storage** — SQLite database survives container and pod restarts via volume mounts
+- **Vector search** — ChromaDB (embedded, persistent) indexes doc embeddings using `all-MiniLM-L6-v2` via ONNX; only the top-3 semantically relevant docs are injected per message instead of all docs
 
 ---
 
@@ -33,8 +34,10 @@ Built with FastAPI · React · Docker · Kubernetes · Jenkins CI/CD.
 │                  FastAPI backend (port 8000)                    │
 │     agent CRUD · skill docs · chat sessions · /health          │
 │                         │                                       │
-│              ┌──────────┴───────────┐                          │
-│          SQLite (PVC)      Anthropic Claude API                 │
+│         ┌───────────────┼──────────────────┐                   │
+│     SQLite (PVC)   ChromaDB (PVC)   Anthropic Claude API       │
+│     agents + docs  doc embeddings   claude-haiku-4-5           │
+│                    (all-MiniLM-L6)                              │
 └─────────────────────────────────────────────────────────────────┘
 
 CI/CD
@@ -42,7 +45,7 @@ CI/CD
 Pull request → Jenkins runs Test + Build → GitHub blocks merge if red
 Merge to main → Jenkins also runs Push + Deploy
 
-  1. Test   — pytest (18 tests, mocked API)
+  1. Test   — pytest (mocked API + mocked ChromaDB)
   2. Build  — docker build backend + frontend
   3. Push   — docker push → Docker Hub (shrenik762/*)  [main only]
   4. Deploy — kubectl apply + rollout restart           [main only]
@@ -52,14 +55,16 @@ Merge to main → Jenkins also runs Push + Deploy
 
 ## Tech Stack
 
-| Layer      | Technology                              |
-|------------|-----------------------------------------|
-| Backend    | Python 3.12, FastAPI, SQLite, Pydantic  |
-| AI         | Anthropic Claude Haiku                  |
-| Frontend   | React 18, React Router, Vite            |
-| Containers | Docker, Docker Compose                  |
-| Orchestration | Kubernetes (minikube), HPA           |
-| CI/CD      | Jenkins (Docker), pytest                |
+| Layer         | Technology                              |
+|---------------|-----------------------------------------|
+| Backend       | Python 3.12, FastAPI, SQLite, Pydantic  |
+| AI            | Anthropic Claude Haiku                  |
+| Vector DB     | ChromaDB 0.5+ (embedded, persistent)    |
+| Embeddings    | all-MiniLM-L6-v2 via ONNX runtime       |
+| Frontend      | React 18, React Router, Vite            |
+| Containers    | Docker, Docker Compose                  |
+| Orchestration | Kubernetes (minikube), HPA              |
+| CI/CD         | Jenkins (Docker), pytest                |
 
 ---
 
@@ -84,6 +89,7 @@ cd ai-agent-platform
 # 2. Backend
 cd backend
 cp .env.example .env          # add your ANTHROPIC_API_KEY
+pip install -r requirements.txt
 python start.py               # http://localhost:8000
 
 # 3. Frontend (new terminal)
@@ -91,6 +97,8 @@ cd frontend
 npm install
 npm run dev                   # http://localhost:5173
 ```
+
+ChromaDB initialises automatically on first start and downloads the `all-MiniLM-L6-v2` ONNX model (~79 MB) on the first embedding call. The model is cached at `~/.cache/chroma/` — subsequent starts are instant.
 
 ---
 
@@ -104,6 +112,8 @@ docker compose up -d          # subsequent runs
 
 - Frontend: http://localhost:3000
 - Backend:  http://localhost:8000
+
+Both SQLite (`/data/agents.db`) and ChromaDB (`/data/chroma/`) are persisted on the `agents-data` named volume.
 
 ---
 
@@ -133,6 +143,56 @@ kubectl apply -f k8s/configmap.yaml \
 
 # Open in browser
 minikube service frontend
+```
+
+---
+
+## Vector Search (RAG)
+
+Skill documents are stored in two places:
+
+| Store | Purpose |
+|---|---|
+| SQLite `docs` table | Source of truth — CRUD, the docs drawer in the UI |
+| ChromaDB `docs` collection | Embedding index — semantic retrieval at chat time |
+
+**Flow when a doc is added:**
+1. Doc is saved to SQLite (title + content)
+2. Content is embedded and upserted into ChromaDB with `agent_id` and `title` in metadata
+
+**Flow at chat time (was: inject all docs):**
+1. User message is embedded on the fly
+2. ChromaDB returns the top-3 docs for that agent by cosine similarity
+3. Only those docs are injected into Claude's system prompt
+
+This means an agent can have hundreds of skill docs without hitting context limits — only the relevant ones are ever sent to the model.
+
+**Startup sync:** On every backend start, any docs already in SQLite are upserted into ChromaDB (idempotent) so existing data is never lost across restarts.
+
+### Verifying ChromaDB
+
+```bash
+# Check health (also shows ChromaDB status + total doc count)
+curl http://localhost:8000/health
+
+# Dump all indexed documents
+cd backend
+python inspect_chroma.py
+
+# Full end-to-end smoke test (add / query / delete — no mocking)
+python smoke_chroma.py
+```
+
+Health response shape:
+```json
+{
+  "status": "ok",
+  "chromadb": {
+    "status": "ok",
+    "doc_count": 5,
+    "path": "chroma_data"
+  }
+}
 ```
 
 ---
@@ -172,25 +232,28 @@ PRs are gated — GitHub blocks merge until Test and Build pass.
 ```
 ai-agent-platform/
 ├── backend/
-│   ├── main.py          # FastAPI routes
-│   ├── agent.py         # Claude Haiku sessions
-│   ├── database.py      # SQLite CRUD
-│   ├── test_main.py     # pytest suite (18 tests)
+│   ├── main.py            # FastAPI routes
+│   ├── agent.py           # Claude Haiku sessions
+│   ├── database.py        # SQLite CRUD
+│   ├── vector_store.py    # ChromaDB wrapper (add/delete/query docs)
+│   ├── test_main.py       # pytest suite (mocked Anthropic + ChromaDB)
+│   ├── smoke_chroma.py    # standalone ChromaDB smoke test
+│   ├── inspect_chroma.py  # dump all indexed documents
 │   └── Dockerfile
 ├── frontend/
 │   ├── src/
-│   │   ├── components/  # Sidebar, Avatar, Dino
-│   │   ├── hooks/       # useTheme
-│   │   └── pages/       # Welcome, AgentForm, Chat
-│   ├── nginx.conf       # SPA routing + /api/ proxy
-│   └── Dockerfile       # multi-stage node→nginx
+│   │   ├── components/    # Sidebar, Avatar, Dino
+│   │   ├── hooks/         # useTheme
+│   │   └── pages/         # Welcome, AgentForm, Chat
+│   ├── nginx.conf         # SPA routing + /api/ proxy
+│   └── Dockerfile         # multi-stage node→nginx
 ├── k8s/
 │   ├── backend-deployment.yaml
 │   ├── frontend-deployment.yaml
-│   ├── configmap.yaml
+│   ├── configmap.yaml     # DB_PATH + CHROMA_PATH
 │   ├── backend-pvc.yaml
-│   └── hpa.yaml         # HorizontalPodAutoscaler
-├── Jenkinsfile          # 4-stage CI/CD pipeline
+│   └── hpa.yaml           # HorizontalPodAutoscaler
+├── Jenkinsfile            # 4-stage CI/CD pipeline
 └── docker-compose.yml
 ```
 
@@ -198,16 +261,16 @@ ai-agent-platform/
 
 ## API Reference
 
-| Method | Endpoint                          | Description          |
-|--------|-----------------------------------|----------------------|
-| GET    | /health                           | Health check         |
-| POST   | /agents                           | Create agent         |
-| GET    | /agents                           | List agents          |
-| GET    | /agents/:id                       | Get agent            |
-| PUT    | /agents/:id                       | Update agent         |
-| DELETE | /agents/:id                       | Delete agent         |
-| POST   | /agents/:id/chat                  | Send message         |
-| GET    | /agents/:id/docs                  | List skill docs      |
-| POST   | /agents/:id/docs                  | Add skill doc        |
-| DELETE | /agents/:id/docs/:doc_id          | Delete skill doc     |
-| GET    | /agents/:id/history/:session_id   | Get chat history     |
+| Method | Endpoint                          | Description                                      |
+|--------|-----------------------------------|--------------------------------------------------|
+| GET    | /health                           | Health check — includes ChromaDB status          |
+| POST   | /agents                           | Create agent                                     |
+| GET    | /agents                           | List agents                                      |
+| GET    | /agents/:id                       | Get agent                                        |
+| PUT    | /agents/:id                       | Update agent                                     |
+| DELETE | /agents/:id                       | Delete agent + purge its docs from ChromaDB      |
+| POST   | /agents/:id/chat                  | Send message — RAG retrieves top-3 relevant docs |
+| GET    | /agents/:id/docs                  | List skill docs (from SQLite)                    |
+| POST   | /agents/:id/docs                  | Add skill doc — saved to SQLite + indexed in ChromaDB |
+| DELETE | /agents/:id/docs/:doc_id          | Delete skill doc from SQLite + ChromaDB          |
+| GET    | /agents/:id/history/:session_id   | Get chat history                                 |

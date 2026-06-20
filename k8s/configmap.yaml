@@ -4,3 +4,4 @@ metadata:
   name: backend-config
 data:
   DB_PATH: /data/agents.db
+  CHROMA_PATH: /data/chroma

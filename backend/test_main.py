@@ -19,6 +19,17 @@ def isolated_db(tmp_path, monkeypatch):
     database.init_db()
 
 
+@pytest.fixture(autouse=True)
+def mock_vector_store():
+    """Prevent ChromaDB from initializing — no embedding model needed in CI."""
+    with patch("vector_store.add_doc"), \
+         patch("vector_store.delete_doc"), \
+         patch("vector_store.delete_agent_docs"), \
+         patch("vector_store.query_docs", return_value=[]), \
+         patch("vector_store.status", return_value={"status": "ok", "doc_count": 0, "path": ":memory:"}):
+        yield
+
+
 @pytest.fixture()
 def client():
     from main import app
@@ -42,7 +53,9 @@ def agent(client):
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
+    data = r.json()
+    assert data["status"] == "ok"
+    assert data["chromadb"]["status"] == "ok"
 
 
 # ── Agent CRUD ───────────────────────────────────────────────────────────────
